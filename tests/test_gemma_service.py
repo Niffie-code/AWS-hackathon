@@ -7,6 +7,7 @@ import gemma_service
 
 
 def test_generation_and_evaluation_request(monkeypatch):
+    monkeypatch.setenv('GEMMA_MODEL_ID', 'gemma-test')
     monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
     monkeypatch.setenv('GEMMA_MODEL_ID', 'gemma-test')
     evaluation = {'score': 88, 'feedback': 'Good work.'}
@@ -24,6 +25,7 @@ def test_generation_and_evaluation_request(monkeypatch):
 
 
 def test_generation_schema_and_invalid_response(monkeypatch):
+    monkeypatch.setenv('GEMMA_MODEL_ID', 'gemma-test')
     monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
     word = dict.fromkeys(('word', 'pronunciation', 'definition', 'nuance', 'spectrum_comparison', 'challenge'), 'value')
     result = {'words': [word, word, word], 'mini_story': 'Story'}
@@ -55,3 +57,29 @@ def test_upstream_status_is_actionable_without_exposing_response(monkeypatch):
         message = gemma_service.generate('IELTS')['error']
         assert f'HTTP {code}' in message
         assert 'secret' not in message
+
+
+def test_discovers_available_gemma_after_stale_model_404(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    monkeypatch.setenv('GEMMA_MODEL_ID', 'gemma-stale')
+    result = {'score': 90, 'feedback': 'Good work.'}
+    transport = Mock(side_effect=[
+        HTTPError('https://example.invalid', 404, 'not found', {}, None),
+        io.BytesIO(json.dumps({'models': [
+            {'name': 'models/gemini-example', 'supportedGenerationMethods': ['generateContent']},
+            {'name': 'models/gemma-available', 'supportedGenerationMethods': ['generateContent']}
+        ]}).encode()),
+        io.BytesIO(json.dumps({'candidates': [{'content': {'parts': [{'text': json.dumps(result)}]}}]}).encode())
+    ])
+    monkeypatch.setattr(gemma_service, 'urlopen', transport)
+    assert gemma_service.generate('IELTS', 'sentence', ['word']) == result
+    assert '/gemma-available:' in transport.call_args.args[0].full_url
+
+
+def test_no_available_gemma_is_explicit_not_mocked(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    monkeypatch.delenv('GEMMA_MODEL_ID', raising=False)
+    transport = Mock(return_value=io.BytesIO(b'{"models": []}'))
+    monkeypatch.setattr(gemma_service, 'urlopen', transport)
+    assert 'no Gemma model' in gemma_service.generate('IELTS')['error']
+    assert transport.call_count == 1
