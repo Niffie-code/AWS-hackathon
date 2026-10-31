@@ -4,7 +4,7 @@ export const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false';
 const delay = () => new Promise(resolve => setTimeout(resolve, 1200 + Math.random() * 600));
 async function post(path, body) {
   try {
-    const response = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:AbortSignal.timeout(65000) });
+    const response = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:AbortSignal.timeout(175000) });
     const data = await response.json();
     if (response.ok && !data?.error) {
       const valid = path === '/api/generate'

@@ -13,24 +13,27 @@ from vocab_prompt import SYSTEM_PROMPT_GENERATION, SYSTEM_PROMPT_EVALUATION, _pa
 def discover_model(key, excluded=None):
     """Select only a Gemma model advertised for generateContent by Google."""
     token = None
+    available = []
     for _ in range(3):
         query = {"pageSize": 1000}
         if token:
             query["pageToken"] = token
         request = Request("https://generativelanguage.googleapis.com/v1beta/models?" + urlencode(query),
                           headers={"x-goog-api-key": key})
-        with urlopen(request, timeout=5) as response:
+        with urlopen(request, timeout=15) as response:
             catalog = json.load(response)
         for model in catalog.get("models", []):
             name = model.get("name", "").removeprefix("models/")
             if (name.startswith("gemma-") and name != excluded
                     and re.fullmatch(r"[A-Za-z0-9._-]+", name)
                     and "generateContent" in model.get("supportedGenerationMethods", [])):
-                return name
+                available.append(name)
         token = catalog.get("nextPageToken")
         if not token:
             break
-    return None
+    # Prefer an advertised smaller instruction model to reduce latency.
+    preferred = ("gemma-3-4b-it", "gemma-3-12b-it", "gemma-3-27b-it")
+    return next((name for name in preferred if name in available), available[0] if available else None)
 
 
 def generate(goal, sentence=None, target_words=None):
@@ -49,18 +52,20 @@ def generate(goal, sentence=None, target_words=None):
     prompt = SYSTEM_PROMPT_EVALUATION if evaluation else SYSTEM_PROMPT_GENERATION
     body = {"contents": [{"role": "user", "parts": [{"text": prompt + "\n\n" + json.dumps(content, ensure_ascii=False)}]}],
             "generationConfig": {"temperature": 0.2 if evaluation else 0.4, "maxOutputTokens": 4096}}
-    deadline = time.monotonic() + 50
+    deadline = time.monotonic() + 150
+    stage = "model discovery"
     try:
         if not model:
             model = discover_model(key)
         if not model:
             return {"error": "Google lists no Gemma model supporting text generation for this API key. Check Gemma availability in Google AI Studio; a different provider may be needed."}
+        stage = "Gemma generation"
         for attempt in range(2):
             request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                               data=json.dumps(body).encode(), method="POST",
                               headers={"Content-Type": "application/json", "x-goog-api-key": key})
             try:
-                with urlopen(request, timeout=max(1, min(30, deadline - time.monotonic()))) as response:
+                with urlopen(request, timeout=max(1, min(65, deadline - time.monotonic()))) as response:
                     data = json.load(response)
                 break
             except HTTPError as exc:
@@ -95,7 +100,7 @@ def generate(goal, sentence=None, target_words=None):
                 request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                                   data=json.dumps(body).encode(), method="POST",
                                   headers={"Content-Type": "application/json", "x-goog-api-key": key})
-                with urlopen(request, timeout=max(1, min(30, deadline - time.monotonic()))) as response:
+                with urlopen(request, timeout=max(1, min(65, deadline - time.monotonic()))) as response:
                     data = json.load(response)
     except HTTPError as exc:
         if exc.code in (401, 403):
@@ -109,7 +114,9 @@ def generate(goal, sentence=None, target_words=None):
         if 500 <= exc.code < 600:
             return {"error": f"Google's model service returned HTTP {exc.code}. Please try again later."}
         return {"error": f"Google's model request failed (HTTP {exc.code}). Check model and API settings."}
-    except (TimeoutError, URLError, OSError):
-        return {"error": "Google did not respond in time or the connection failed. Please retry."}
+    except TimeoutError:
+        return {"error": f"Google timed out during {stage}. Please retry or select a smaller advertised Gemma model."}
+    except (URLError, OSError):
+        return {"error": f"The Google connection failed during {stage}. Check Vercel runtime logs for network restrictions."}
     except (ValueError, KeyError, IndexError, TypeError):
         return {"error": "Google returned an unreadable API response. Please retry."}

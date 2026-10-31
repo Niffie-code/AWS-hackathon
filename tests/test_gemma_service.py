@@ -104,7 +104,14 @@ def test_timeout_and_blocked_output_are_distinct(monkeypatch):
     monkeypatch.setenv('GEMMA_MODEL_ID', 'gemma-test')
     transport = Mock(side_effect=TimeoutError())
     monkeypatch.setattr(gemma_service, 'urlopen', transport)
-    assert 'connection failed' in gemma_service.generate('IELTS')['error']
+    assert 'timed out during Gemma generation' in gemma_service.generate('IELTS')['error']
     transport.side_effect = None
     transport.return_value = io.BytesIO(b'{"promptFeedback":{"blockReason":"SAFETY"}}')
     assert 'blocked' in gemma_service.generate('IELTS')['error']
+
+
+def test_discovery_prefers_smaller_advertised_instruction_model(monkeypatch):
+    models = [{'name': 'models/' + name, 'supportedGenerationMethods': ['generateContent']}
+              for name in ('gemma-3-27b-it', 'gemma-3-4b-it', 'gemma-3-12b-it')]
+    monkeypatch.setattr(gemma_service, 'urlopen', Mock(return_value=io.BytesIO(json.dumps({'models': models}).encode())))
+    assert gemma_service.discover_model('fake-key') == 'gemma-3-4b-it'
