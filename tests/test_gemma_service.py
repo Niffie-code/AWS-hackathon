@@ -140,3 +140,25 @@ def test_persistent_failure_is_bounded_and_uses_alternative(monkeypatch):
     assert 'after automatic recovery' in result['error']
     assert transport.call_count==3
     assert '/gemma-alternative:' in transport.call_args.args[0].full_url
+
+
+def test_gemma4_selection_uses_smallest_advertised_model(monkeypatch):
+    models = [{'name': 'models/' + name, 'supportedGenerationMethods': ['generateContent']}
+              for name in ('gemma-4-26b-a4b-it', 'gemma-4-31b-it', 'gemma-4-e4b-it')]
+    monkeypatch.setattr(gemma_service, 'urlopen', Mock(return_value=io.BytesIO(json.dumps({'models': models}).encode())))
+    assert gemma_service.discover_model('fake-key') == 'gemma-4-e4b-it'
+
+
+def test_provider_logs_do_not_expose_key_or_arbitrary_error_text(monkeypatch, caplog):
+    monkeypatch.setattr(gemma_service.time,'sleep',lambda _:None)
+    monkeypatch.setattr(gemma_service,'discover_model',lambda *a,**kw:None)
+    def fail(*args,**kwargs):
+        raise HTTPError('https://example.invalid',500,'private detail',{},io.BytesIO(b'{"error":{"status":"INTERNAL","message":"private secret-key"}}'))
+    monkeypatch.setattr(gemma_service,'urlopen',fail)
+    import time
+    try:
+        gemma_service.complete('secret-key','gemma-test',{},time.monotonic()+30)
+    except HTTPError:
+        pass
+    assert 'provider_status=INTERNAL' in caplog.text
+    assert 'secret-key' not in caplog.text and 'private' not in caplog.text

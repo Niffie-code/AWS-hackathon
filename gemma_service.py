@@ -1,5 +1,6 @@
 """Gemma via Google's Generative Language API; no AWS credentials required."""
 import json
+import logging
 import os
 import re
 import time
@@ -8,6 +9,14 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from vocab_prompt import SYSTEM_PROMPT_GENERATION, SYSTEM_PROMPT_EVALUATION, _parse_json, _validate_schema
+
+
+logger = logging.getLogger(__name__)
+
+
+def model_rank(name):
+    size = re.search(r"(?:^|[-])(?:e)?(\d+(?:\.\d+)?)b(?:[-]|$)", name)
+    return (float(size.group(1)) if size else float('inf'), 0 if name.endswith('-it') else 1, name)
 
 
 def discover_model(key, excluded=None):
@@ -32,8 +41,7 @@ def discover_model(key, excluded=None):
         if not token:
             break
     # Prefer an advertised smaller instruction model to reduce latency.
-    preferred = ("gemma-3-4b-it", "gemma-3-12b-it", "gemma-3-27b-it")
-    return next((name for name in preferred if name in available), available[0] if available else None)
+    return min(available, key=model_rank) if available else None
 
 
 def complete(key, model, body, deadline):
@@ -49,6 +57,15 @@ def complete(key, model, body, deadline):
             with urlopen(request, timeout=min(45, remaining)) as response:
                 return model, json.load(response)
         except HTTPError as exc:
+            # Log only provider codes; never credentials, request bodies, or arbitrary error text.
+            provider_status = "UNKNOWN"
+            try:
+                status = json.loads(exc.read(8192)).get("error", {}).get("status", "")
+                if re.fullmatch(r"[A-Z_]{1,60}", status):
+                    provider_status = status
+            except (ValueError, AttributeError, OSError):
+                pass
+            logger.warning("GEMMA_UPSTREAM model=%s attempt=%s http=%s provider_status=%s", model, attempt + 1, exc.code, provider_status)
             if attempt == 2 or exc.code not in (404, 500, 502, 503, 504):
                 raise
             if exc.code == 404 or attempt == 1:

@@ -1,5 +1,6 @@
 from http.server import BaseHTTPRequestHandler
 import json
+import logging
 
 from gemma_service import generate
 
@@ -27,10 +28,13 @@ class CoachHandler(BaseHTTPRequestHandler):
                 result = generate(goal.strip(), sentence.strip(), words)
             else:
                 result = generate(goal.strip())
+            if "error" in result:
+                logging.getLogger(__name__).warning("GEMMA_REQUEST_FAILED route=%s reason=%s", "evaluate" if self.evaluation else "generate", result["error"])
             return self.respond(502 if "error" in result else 200, result)
         except (ValueError, TypeError, UnicodeError):
             return self.respond(400, {"error": "Please provide valid JSON."})
-        except Exception:
+        except Exception as exc:
+            logging.getLogger(__name__).error("GEMMA_HANDLER_FAILURE type=%s", type(exc).__name__)
             return self.respond(500, {"error": "The coach is temporarily unavailable."})
 
     def respond(self, status, data):
