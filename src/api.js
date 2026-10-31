@@ -1,5 +1,6 @@
 import { mockVocabulary, mockEvaluation } from './mockData';
-export const USE_MOCK = true;
+// Defaults to mock locally; set VITE_USE_MOCK=false when building for AWS.
+export const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false';
 const delay = () => new Promise(resolve => setTimeout(resolve, 1200 + Math.random() * 600));
 async function post(path, body) {
   try {

@@ -1,81 +1,51 @@
-# Gemma on Bedrock Mantle
+# LexiGemma
 
-Python 3.12 Lambda with an API Gateway HTTP API (`POST /chat`) and a native
-Chat Completions request to
-`https://bedrock-mantle.<region>.api.aws/v1/chat/completions`.
+LexiGemma is a React vocabulary coach backed by AWS Bedrock Converse. The SAM deployment serves the built frontend and the generation/evaluation APIs from one Lambda and API Gateway HTTP API. The deployed frontend calls the APIs on the same origin.
 
-The handler uses **boto3's credential chain and botocore SigV4 signing** with
-service name `bedrock`. It sends `model`, `messages`, `max_tokens`, and `stream`
-directly; it does not wrap the payload in `InvokeModel` or use Converse.
-Temporary Lambda execution-role credentials include the session token.
+## Run locally with mock data
 
-## Model prerequisite
-
-`google.gemma-4-31b` is the requested default, **not a verified model ID**.
-Before deployment, confirm that AWS offers this exact ID through Mantle in
-your chosen region and that your account has access. Otherwise pass a supported
-ID as the `ModelId` SAM parameter. Mocked tests do not establish model availability,
-account authorization, endpoint availability, or live signing compatibility.
-The current boto3 service definitions have no native Mantle chat operation;
-the handler therefore uses the signed REST endpoint.
-
-## Local verification
-
-From the repository root:
+Requires Node.js 20.19+ or 22.12+ and npm.
 
 ```sh
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q
-.venv/bin/python -m compileall -q src tests
-```
-
-Tests use fake credentials and a mocked HTTPS transport, with real botocore
-request signing. No AWS calls, API keys, or charges are required. They cover
-the native payload, signed headers, successful completions, input validation,
-base64 HTTP events, model/region overrides, and upstream failures.
-
-## Deployment
-
-Install the AWS SAM CLI and configure AWS credentials with permission to create
-CloudFormation, Lambda, API Gateway, and IAM resources. From the repository root:
-
-```sh
-sam validate --region us-east-1
-sam build
-sam deploy --guided --region us-east-1 --parameter-overrides ModelId=google.gemma-4-31b
-```
-
-Select a region and model combination that actually supports Mantle. The template
-grants the execution role `bedrock:InvokeModel` on the configured foundation model
-in that region. SAM provides the Lambda logging role and API invocation permission.
-Deployment creates a **public, unauthenticated** hackathon endpoint; add API
-authorization before using it with private data or opening it broadly.
-
-Use the `ChatEndpoint` stack output:
-
-```sh
-curl --fail-with-body "$CHAT_ENDPOINT" \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"Explain serverless computing in one sentence.","max_tokens":128}'
-```
-
-Success returns the native completion JSON, including `choices` and any `usage`
-provided by the model. Invalid input returns 400; model throttling returns 429;
-other upstream failures return 502. Upstream error bodies and prompts are not logged.
-The HTTPS timeout is 25 seconds within the 30-second Lambda timeout. This is a
-non-streaming endpoint intended for short hackathon responses.
-
-AWS deployment and live model inference must be verified separately; the local
-suite does not perform either action.
-
-## LexiGemma frontend
-
-The React dashboard runs independently with local mock data:
-
-```sh
-npm install
+npm ci
 npm run dev
 ```
 
-Use `npm run build` to verify a production build. The mock vocabulary is fixed for demonstration, regardless of the goal entered. To connect a backend, set `USE_MOCK` to `false` in `src/api.js` and provide `POST /api/generate` and `POST /api/evaluate` endpoints returning the response shapes used by `vocab_prompt.py`. These endpoints are not supplied by the existing Lambda template.
+The local dashboard defaults to mock data. The mock dataset is fixed regardless of the goal. The mock and backend tests need no AWS credentials:
+
+```sh
+python vocab_prompt.py
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+## Deploy to AWS
+
+Prerequisites: Node.js and npm, Python 3.12, AWS CLI, AWS SAM CLI, and an AWS identity permitted to deploy CloudFormation, Lambda, API Gateway, IAM and S3 resources and invoke the selected Bedrock model. Configure credentials using your organization's AWS CLI login method and confirm the target account with `aws sts get-caller-identity`.
+
+1. In the Bedrock console, confirm the **exact model ID**, region, account access, and support for the **Converse API**. The default `google.gemma-4-31b` is a placeholder requested for this project; its availability and compatibility have not been verified. The template's IAM policy is scoped to a regional foundation-model ARN; inference profiles or other model resource types require an appropriate policy change.
+2. From the repository root, run:
+
+   ```sh
+   ./scripts/prepare-deployment.sh
+   sam validate --lint --region YOUR_REGION
+   sam build
+   sam deploy --guided --region YOUR_REGION --parameter-overrides ModelId=YOUR_MODEL_ID
+   ```
+
+   The preparation script installs npm dependencies using the lockfile, builds the frontend with `VITE_USE_MOCK=false`, and copies it and the Python handler to `.deploy/`. SAM packages the Python requirements. Re-run the script and `sam build` whenever frontend or backend code changes. The build requires a local Python 3.12 interpreter.
+3. Open the `WebUrl` CloudFormation output. Enter a goal and generate vocabulary; select a word and submit a sentence for evaluation. Both requests call Bedrock through the Lambda execution role. Check Lambda CloudWatch logs if a request fails.
+
+**The URL is public and has no authentication or rate limiting.** Anyone who can reach it can invoke the model and incur charges. Add an authorizer and appropriate usage controls before sharing it broadly. API Gateway and Lambda impose request and response size limits; this deployment is intended for a small hackathon app, not large static assets. Its API request timeout is bounded by API Gateway and the Lambda's 29-second timeout; long model responses may fail.
+
+AWS deployment and live inference have not been tested in this repository's development environment. The frontend returns a generic error on model failure; check logs and AWS configuration without exposing private prompts or credentials.
+
+## Structure
+
+- `vocab_prompt.py`: generation/evaluation prompts, Converse client, response parsing and offline mock tests.
+- `web_handler.py`: API routes and static-file serving for API Gateway HTTP API events.
+- `src/api.js`: mock API for local development; `VITE_USE_MOCK=false` selects real same-origin requests at build time.
+- `src/App.jsx`, `src/style.css`, `src/mockData.js`: dashboard and mock data.
+- `template.yaml`: Lambda, API Gateway and Bedrock IAM policy.
+
+The older `src/app.py` Mantle chat handler remains in the repository for reference; the current template deploys `web_handler.py` and uses Converse.

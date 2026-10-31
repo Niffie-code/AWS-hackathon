@@ -84,8 +84,12 @@ Respond with ONE valid JSON object and nothing else: no markdown fences, no text
 def _get_client():
     """Create and retain the client only when inference is requested."""
     import boto3
+    from botocore.config import Config
 
-    return boto3.client("bedrock-runtime", region_name=AWS_REGION)
+    return boto3.client(
+        "bedrock-runtime", region_name=AWS_REGION,
+        config=Config(connect_timeout=3, read_timeout=24, retries={"total_max_attempts": 1}),
+    )
 
 
 def _parse_json(raw_text):
