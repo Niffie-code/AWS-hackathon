@@ -67,3 +67,7 @@ Progress is local to this browser/device and is lost if site data is cleared. St
 The Notifications tab stores a local daily reminder time. An in-app reminder appears at or after that time when the page is open and awake, once per local day. Desktop notifications require explicit browser permission and platform support. Closed-page/suspended-device delivery is not supported. Download the recurring calendar event and import it into a calendar app for reminders outside the website; confirm notification settings in that calendar app.
 
 Run `npm test` for learning state and reminder scheduling tests.
+
+### Optional backup Google API key
+
+In Vercel's sensitive environment variables, keep the primary key as `GEMINI_API_KEY` and add a second authorized key as `GEMINI_API_KEY_BACKUP`. Apply them to the deployment environment you use and redeploy. Never prefix either with `VITE_` or commit their values. Requests try the primary first and fail over to the backup for service errors, rejected access, or connection failures. Duplicate keys are ignored and both attempts share an overall time budget. Rate/quota limits, invalid model configuration, blocked content and malformed output do not rotate accounts. This is not a guarantee against a Google-wide outage; two keys use the same provider.

@@ -162,3 +162,43 @@ def test_provider_logs_do_not_expose_key_or_arbitrary_error_text(monkeypatch, ca
         pass
     assert 'provider_status=INTERNAL' in caplog.text
     assert 'secret-key' not in caplog.text and 'private' not in caplog.text
+
+
+def test_backup_key_used_after_primary_service_failure(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY','primary-secret')
+    monkeypatch.setenv('GEMINI_API_KEY_BACKUP','backup-secret')
+    expected={'score':91,'feedback':'Good work.'}
+    call=Mock(side_effect=[{'error':'Unavailable','_can_failover':True},expected])
+    monkeypatch.setattr(gemma_service,'_generate_with_key',call)
+    assert gemma_service.generate('IELTS','sentence',['word'])==expected
+    assert [c.args[0] for c in call.call_args_list]==['primary-secret','backup-secret']
+
+
+def test_rate_limit_does_not_rotate_accounts(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY','primary-secret')
+    monkeypatch.setenv('GEMINI_API_KEY_BACKUP','backup-secret')
+    call=Mock(return_value={'error':'Rate limit'})
+    monkeypatch.setattr(gemma_service,'_generate_with_key',call)
+    assert gemma_service.generate('IELTS')=={'error':'Rate limit'}
+    assert call.call_count==1
+
+
+def test_duplicate_keys_not_retried_and_internal_flags_not_exposed(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY','same-secret')
+    monkeypatch.setenv('GEMINI_API_KEY_BACKUP','same-secret')
+    call=Mock(return_value={'error':'Unavailable','_can_failover':True})
+    monkeypatch.setattr(gemma_service,'_generate_with_key',call)
+    assert gemma_service.generate('IELTS')=={'error':'Unavailable'}
+    assert call.call_count==1
+
+
+def test_real_transport_changes_auth_header_after_access_failure(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY','primary-secret')
+    monkeypatch.setenv('GEMINI_API_KEY_BACKUP','backup-secret')
+    monkeypatch.setenv('GEMMA_MODEL_ID','gemma-test')
+    expected={'score':90,'feedback':'Good work.'}
+    transport=Mock(side_effect=[HTTPError('https://example.invalid',403,'denied',{},io.BytesIO(b'{}')),
+        io.BytesIO(json.dumps({'candidates':[{'content':{'parts':[{'text':json.dumps(expected)}]}}]}).encode())])
+    monkeypatch.setattr(gemma_service,'urlopen',transport)
+    assert gemma_service.generate('IELTS','sentence',['word'])==expected
+    assert [c.args[0].get_header('X-goog-api-key') for c in transport.call_args_list]==['primary-secret','backup-secret']

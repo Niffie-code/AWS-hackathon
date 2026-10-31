@@ -81,9 +81,29 @@ def complete(key, model, body, deadline):
 
 
 def generate(goal, sentence=None, target_words=None):
-    key = os.getenv("GEMINI_API_KEY")
-    if not key:
+    """Use a backup credential only for service/connection/access failures."""
+    keys = []
+    for name in ("GEMINI_API_KEY", "GEMINI_API_KEY_BACKUP"):
+        value = os.getenv(name, "").strip()
+        if value and value not in keys:
+            keys.append(value)
+    if not keys:
         return {"error": "The coach is not configured. Add GEMINI_API_KEY in Vercel settings."}
+    total_deadline = time.monotonic() + 150
+    for index, key in enumerate(keys):
+        if time.monotonic() >= total_deadline - 5:
+            break
+        budget = 70 if len(keys) > 1 else 150
+        result = _generate_with_key(key, goal, sentence, target_words,
+                                    min(total_deadline, time.monotonic() + budget))
+        retryable = result.pop("_can_failover", False)
+        if not retryable or index == len(keys) - 1:
+            return result
+        logger.warning("GEMMA_KEY_FAILOVER from_slot=%s to_slot=%s", index + 1, index + 2)
+    return {"error": "Google did not complete the request within the available time. Please retry."}
+
+
+def _generate_with_key(key, goal, sentence, target_words, deadline):
     model = os.getenv("GEMMA_MODEL_ID", "").strip().removeprefix("models/")
     if model and not re.fullmatch(r"[A-Za-z0-9._-]+", model):
         return {"error": "The configured model ID is invalid."}
@@ -96,7 +116,6 @@ def generate(goal, sentence=None, target_words=None):
     prompt = SYSTEM_PROMPT_EVALUATION if evaluation else SYSTEM_PROMPT_GENERATION
     body = {"contents": [{"role": "user", "parts": [{"text": prompt + "\n\n" + json.dumps(content, ensure_ascii=False)}]}],
             "generationConfig": {"temperature": 0.2 if evaluation else 0.4, "maxOutputTokens": 4096}}
-    deadline = time.monotonic() + 150
     stage = "model discovery"
     try:
         if not model:
@@ -130,7 +149,7 @@ def generate(goal, sentence=None, target_words=None):
                 model, data = complete(key, model, body, deadline)
     except HTTPError as exc:
         if exc.code in (401, 403):
-            return {"error": "Google rejected access to the model. Check the API key and model access in Google AI Studio."}
+            return {"error": "Google rejected access to the model. Check the API key and model access in Google AI Studio.", "_can_failover": True}
         if exc.code == 429:
             return {"error": "The coach is receiving too many requests. Please try again shortly."}
         if exc.code == 400:
@@ -138,11 +157,11 @@ def generate(goal, sentence=None, target_words=None):
         if exc.code == 404:
             return {"error": "Google could not find the configured model (HTTP 404). Check GEMMA_MODEL_ID and model availability for your API key."}
         if 500 <= exc.code < 600:
-            return {"error": f"Google's model service is unavailable (HTTP {exc.code}) after automatic recovery attempts. Your saved progress is safe; please try again later."}
+            return {"error": f"Google's model service is unavailable (HTTP {exc.code}) after automatic recovery attempts. Your saved progress is safe; please try again later.", "_can_failover": True}
         return {"error": f"Google's model request failed (HTTP {exc.code}). Check model and API settings."}
     except TimeoutError:
-        return {"error": f"Google timed out during {stage}. Please retry or select a smaller advertised Gemma model."}
+        return {"error": f"Google timed out during {stage}. Please retry or select a smaller advertised Gemma model.", "_can_failover": True}
     except (URLError, OSError):
-        return {"error": f"The Google connection failed during {stage}. Check Vercel runtime logs for network restrictions."}
+        return {"error": f"The Google connection failed during {stage}. Check Vercel runtime logs for network restrictions.", "_can_failover": True}
     except (ValueError, KeyError, IndexError, TypeError):
         return {"error": "Google returned an unreadable API response. Please retry."}
