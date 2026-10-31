@@ -44,3 +44,14 @@ def test_no_key_and_upstream_auth_error(monkeypatch):
         raise HTTPError('https://example.invalid', 403, 'secret', {}, None)
     monkeypatch.setattr(gemma_service, 'urlopen', fail)
     assert 'secret' not in gemma_service.generate('IELTS')['error']
+
+
+def test_upstream_status_is_actionable_without_exposing_response(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'secret')
+    for code in (400, 404, 500):
+        def fail(*args, code=code, **kwargs):
+            raise HTTPError('https://example.invalid', code, 'secret detail', {}, None)
+        monkeypatch.setattr(gemma_service, 'urlopen', fail)
+        message = gemma_service.generate('IELTS')['error']
+        assert f'HTTP {code}' in message
+        assert 'secret' not in message

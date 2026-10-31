@@ -40,6 +40,12 @@ def generate(goal, sentence=None, target_words=None):
             return {"error": "Google rejected access to the model. Check the API key and model access in Google AI Studio."}
         if exc.code == 429:
             return {"error": "The coach is receiving too many requests. Please try again shortly."}
-        return {"error": "The model request failed. Check the model ID and try again."}
+        if exc.code == 400:
+            return {"error": "Google rejected the model request (HTTP 400). Check that the configured model supports text generation with the Gemini API."}
+        if exc.code == 404:
+            return {"error": "Google could not find the configured model (HTTP 404). Check GEMMA_MODEL_ID and model availability for your API key."}
+        if 500 <= exc.code < 600:
+            return {"error": f"Google's model service returned HTTP {exc.code}. Please try again later."}
+        return {"error": f"Google's model request failed (HTTP {exc.code}). Check model and API settings."}
     except (URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError):
         return {"error": "The coach could not produce a valid response. Please try again."}
