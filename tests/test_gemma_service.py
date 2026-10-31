@@ -115,3 +115,28 @@ def test_discovery_prefers_smaller_advertised_instruction_model(monkeypatch):
               for name in ('gemma-3-27b-it', 'gemma-3-4b-it', 'gemma-3-12b-it')]
     monkeypatch.setattr(gemma_service, 'urlopen', Mock(return_value=io.BytesIO(json.dumps({'models': models}).encode())))
     assert gemma_service.discover_model('fake-key') == 'gemma-3-4b-it'
+
+
+def test_transient_500_recovers_without_user_retry(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    monkeypatch.setenv('GEMMA_MODEL_ID', 'gemma-test')
+    monkeypatch.setattr(gemma_service.time, 'sleep', lambda _: None)
+    result = {'score': 90, 'feedback': 'Good work.'}
+    transport = Mock(side_effect=[HTTPError('https://example.invalid', 500, 'private', {}, None),
+        io.BytesIO(json.dumps({'candidates': [{'content': {'parts': [{'text': json.dumps(result)}]}}]}).encode())])
+    monkeypatch.setattr(gemma_service, 'urlopen', transport)
+    assert gemma_service.generate('IELTS','sentence',['word']) == result
+    assert transport.call_count == 2
+
+
+def test_persistent_failure_is_bounded_and_uses_alternative(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    monkeypatch.setenv('GEMMA_MODEL_ID', 'gemma-test')
+    monkeypatch.setattr(gemma_service.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(gemma_service,'discover_model',lambda *args,**kwargs:'gemma-alternative')
+    transport=Mock(side_effect=HTTPError('https://example.invalid',503,'private',{},None))
+    monkeypatch.setattr(gemma_service,'urlopen',transport)
+    result=gemma_service.generate('IELTS')
+    assert 'after automatic recovery' in result['error']
+    assert transport.call_count==3
+    assert '/gemma-alternative:' in transport.call_args.args[0].full_url

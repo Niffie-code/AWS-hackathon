@@ -36,6 +36,33 @@ def discover_model(key, excluded=None):
     return next((name for name in preferred if name in available), available[0] if available else None)
 
 
+def complete(key, model, body, deadline):
+    """Retry transient provider errors, with at most three generation calls."""
+    for attempt in range(3):
+        remaining = deadline - time.monotonic()
+        if remaining < 2:
+            raise TimeoutError("Generation deadline exceeded")
+        request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                          data=json.dumps(body).encode(), method="POST",
+                          headers={"Content-Type": "application/json", "x-goog-api-key": key})
+        try:
+            with urlopen(request, timeout=min(45, remaining)) as response:
+                return model, json.load(response)
+        except HTTPError as exc:
+            if attempt == 2 or exc.code not in (404, 500, 502, 503, 504):
+                raise
+            if exc.code == 404 or attempt == 1:
+                try:
+                    replacement = discover_model(key, excluded=model)
+                except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+                    replacement = None
+                if replacement:
+                    model = replacement
+                elif exc.code == 404:
+                    raise exc
+            time.sleep(0.5 * (attempt + 1))
+
+
 def generate(goal, sentence=None, target_words=None):
     key = os.getenv("GEMINI_API_KEY")
     if not key:
@@ -60,21 +87,7 @@ def generate(goal, sentence=None, target_words=None):
         if not model:
             return {"error": "Google lists no Gemma model supporting text generation for this API key. Check Gemma availability in Google AI Studio; a different provider may be needed."}
         stage = "Gemma generation"
-        for attempt in range(2):
-            request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                              data=json.dumps(body).encode(), method="POST",
-                              headers={"Content-Type": "application/json", "x-goog-api-key": key})
-            try:
-                with urlopen(request, timeout=max(1, min(65, deadline - time.monotonic()))) as response:
-                    data = json.load(response)
-                break
-            except HTTPError as exc:
-                if exc.code != 404 or attempt:
-                    raise
-                replacement = discover_model(key, excluded=model)
-                if not replacement:
-                    return {"error": "The selected model is unavailable, and Google lists no alternative Gemma model for this API key. Check Gemma availability in Google AI Studio."}
-                model = replacement
+        model, data = complete(key, model, body, deadline)
         for repair_attempt in range(2):
             if data.get("promptFeedback", {}).get("blockReason"):
                 return {"error": "Google blocked this prompt. Please try a different learning goal."}
@@ -97,11 +110,7 @@ def generate(goal, sentence=None, target_words=None):
                     "Include every required key. Do not explain your reasoning."
                 )
                 body["generationConfig"]["temperature"] = 0.1
-                request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                                  data=json.dumps(body).encode(), method="POST",
-                                  headers={"Content-Type": "application/json", "x-goog-api-key": key})
-                with urlopen(request, timeout=max(1, min(65, deadline - time.monotonic()))) as response:
-                    data = json.load(response)
+                model, data = complete(key, model, body, deadline)
     except HTTPError as exc:
         if exc.code in (401, 403):
             return {"error": "Google rejected access to the model. Check the API key and model access in Google AI Studio."}
@@ -112,7 +121,7 @@ def generate(goal, sentence=None, target_words=None):
         if exc.code == 404:
             return {"error": "Google could not find the configured model (HTTP 404). Check GEMMA_MODEL_ID and model availability for your API key."}
         if 500 <= exc.code < 600:
-            return {"error": f"Google's model service returned HTTP {exc.code}. Please try again later."}
+            return {"error": f"Google's model service is unavailable (HTTP {exc.code}) after automatic recovery attempts. Your saved progress is safe; please try again later."}
         return {"error": f"Google's model request failed (HTTP {exc.code}). Check model and API settings."}
     except TimeoutError:
         return {"error": f"Google timed out during {stage}. Please retry or select a smaller advertised Gemma model."}
