@@ -1,5 +1,6 @@
 {
-  "buildCommand": "VITE_USE_MOCK=true npm run build",
+  "buildCommand": "VITE_USE_MOCK=false npm run build",
   "outputDirectory": "dist",
-  "framework": "vite"
+  "framework": "vite",
+  "functions": { "api/*.py": { "maxDuration": 30 } }
 }

@@ -1,5 +1,13 @@
 # LexiGemma
 
+## Vercel deployment with Gemma (no AWS)
+
+Import this repository into Vercel. In the project settings, add `GEMINI_API_KEY` as a sensitive environment variable for the environments you deploy. Obtain the key from Google AI Studio, restrict it to the Generative Language API, and set usage limits. Optionally set `GEMMA_MODEL_ID` to a Gemma model available to your key; the default is `gemma-3-27b-it`. Verify the model ID and availability in Google AI Studio. Redeploy after changing environment variables. Do not add the key to source control or client-side `VITE_` variables.
+
+Vercel builds the frontend with `VITE_USE_MOCK=false`; `/api/generate` and `/api/evaluate` run Python serverless functions and call the Google Generative Language API on the server. The app still defaults to mock data when run locally. Live calls require model access, quota and a working key; no live inference has been verified. The public API has no authentication or rate limiting, so protect it and set limits before sharing to avoid unwanted use and charges. Vercel function timeouts and Google model availability depend on your account and plan.
+
+## Optional legacy AWS deployment
+
 LexiGemma is a React vocabulary coach backed by AWS Bedrock Converse. The SAM deployment serves the built frontend and the generation/evaluation APIs from one Lambda and API Gateway HTTP API. The deployed frontend calls the APIs on the same origin.
 
 ## Run locally with mock data
