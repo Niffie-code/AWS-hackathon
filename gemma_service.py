@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import time
 from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -47,7 +48,8 @@ def generate(goal, sentence=None, target_words=None):
         content["task"] = "Generate 3 new words tailored to my goal."
     prompt = SYSTEM_PROMPT_EVALUATION if evaluation else SYSTEM_PROMPT_GENERATION
     body = {"contents": [{"role": "user", "parts": [{"text": prompt + "\n\n" + json.dumps(content, ensure_ascii=False)}]}],
-            "generationConfig": {"temperature": 0.2 if evaluation else 0.4, "maxOutputTokens": 2048}}
+            "generationConfig": {"temperature": 0.2 if evaluation else 0.4, "maxOutputTokens": 4096}}
+    deadline = time.monotonic() + 50
     try:
         if not model:
             model = discover_model(key)
@@ -58,7 +60,7 @@ def generate(goal, sentence=None, target_words=None):
                               data=json.dumps(body).encode(), method="POST",
                               headers={"Content-Type": "application/json", "x-goog-api-key": key})
             try:
-                with urlopen(request, timeout=20) as response:
+                with urlopen(request, timeout=max(1, min(30, deadline - time.monotonic()))) as response:
                     data = json.load(response)
                 break
             except HTTPError as exc:
@@ -68,11 +70,33 @@ def generate(goal, sentence=None, target_words=None):
                 if not replacement:
                     return {"error": "The selected model is unavailable, and Google lists no alternative Gemma model for this API key. Check Gemma availability in Google AI Studio."}
                 model = replacement
-        parts = data["candidates"][0]["content"]["parts"]
-        text = "".join(part.get("text", "") for part in parts)
-        result = _parse_json(text)
-        _validate_schema(result, evaluation)
-        return result
+        for repair_attempt in range(2):
+            if data.get("promptFeedback", {}).get("blockReason"):
+                return {"error": "Google blocked this prompt. Please try a different learning goal."}
+            candidates = data.get("candidates") or []
+            candidate = candidates[0] if candidates else {}
+            if candidate.get("finishReason") in ("SAFETY", "RECITATION", "PROHIBITED_CONTENT"):
+                return {"error": "Google declined this response. Please rephrase your goal or sentence."}
+            try:
+                parts = candidate.get("content", {}).get("parts", [])
+                text = "".join(part.get("text", "") for part in parts if not part.get("thought"))
+                result = _parse_json(text)
+                _validate_schema(result, evaluation)
+                return result
+            except (ValueError, KeyError, IndexError, TypeError):
+                if repair_attempt or deadline - time.monotonic() < 5:
+                    reason = "cut off" if candidate.get("finishReason") == "MAX_TOKENS" else "not valid JSON in the required format"
+                    return {"error": f"Gemma's answer was {reason}, even after recovery. Please retry with a shorter goal."}
+                body["contents"][0]["parts"][0]["text"] += (
+                    "\nIMPORTANT: Output ONLY the requested JSON object. Keep each field concise. "
+                    "Include every required key. Do not explain your reasoning."
+                )
+                body["generationConfig"]["temperature"] = 0.1
+                request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                  data=json.dumps(body).encode(), method="POST",
+                                  headers={"Content-Type": "application/json", "x-goog-api-key": key})
+                with urlopen(request, timeout=max(1, min(30, deadline - time.monotonic()))) as response:
+                    data = json.load(response)
     except HTTPError as exc:
         if exc.code in (401, 403):
             return {"error": "Google rejected access to the model. Check the API key and model access in Google AI Studio."}
@@ -85,5 +109,7 @@ def generate(goal, sentence=None, target_words=None):
         if 500 <= exc.code < 600:
             return {"error": f"Google's model service returned HTTP {exc.code}. Please try again later."}
         return {"error": f"Google's model request failed (HTTP {exc.code}). Check model and API settings."}
-    except (URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError):
-        return {"error": "The coach could not produce a valid response. Please try again."}
+    except (TimeoutError, URLError, OSError):
+        return {"error": "Google did not respond in time or the connection failed. Please retry."}
+    except (ValueError, KeyError, IndexError, TypeError):
+        return {"error": "Google returned an unreadable API response. Please retry."}

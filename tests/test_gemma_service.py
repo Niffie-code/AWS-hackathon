@@ -83,3 +83,28 @@ def test_no_available_gemma_is_explicit_not_mocked(monkeypatch):
     monkeypatch.setattr(gemma_service, 'urlopen', transport)
     assert 'no Gemma model' in gemma_service.generate('IELTS')['error']
     assert transport.call_count == 1
+
+
+def test_repairs_malformed_output_once(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    monkeypatch.setenv('GEMMA_MODEL_ID', 'gemma-test')
+    def reply(text, reason='STOP'):
+        return io.BytesIO(json.dumps({'candidates': [{'finishReason': reason, 'content': {'parts': [{'text': text}]}}]}).encode())
+    expected = {'score': 85, 'feedback': 'Good work.'}
+    transport = Mock(side_effect=[reply('{"score":', 'MAX_TOKENS'), reply(json.dumps(expected))])
+    monkeypatch.setattr(gemma_service, 'urlopen', transport)
+    assert gemma_service.generate('IELTS', 'sentence', ['word']) == expected
+    assert transport.call_count == 2
+    transport.side_effect = [reply('prose'), reply('still prose')]
+    assert 'even after recovery' in gemma_service.generate('IELTS', 'sentence', ['word'])['error']
+
+
+def test_timeout_and_blocked_output_are_distinct(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    monkeypatch.setenv('GEMMA_MODEL_ID', 'gemma-test')
+    transport = Mock(side_effect=TimeoutError())
+    monkeypatch.setattr(gemma_service, 'urlopen', transport)
+    assert 'connection failed' in gemma_service.generate('IELTS')['error']
+    transport.side_effect = None
+    transport.return_value = io.BytesIO(b'{"promptFeedback":{"blockReason":"SAFETY"}}')
+    assert 'blocked' in gemma_service.generate('IELTS')['error']

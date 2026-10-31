@@ -4,9 +4,15 @@ export const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false';
 const delay = () => new Promise(resolve => setTimeout(resolve, 1200 + Math.random() * 600));
 async function post(path, body) {
   try {
-    const response = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const response = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:AbortSignal.timeout(65000) });
     const data = await response.json();
-    return response.ok ? data : {error: data.error || 'The coach could not complete your request.', ...(data.raw_text ? {raw_text:data.raw_text} : {})};
+    if (response.ok && !data?.error) {
+      const valid = path === '/api/generate'
+        ? Array.isArray(data?.words) && data.words.length === 3 && typeof data.mini_story === 'string' && data.words.every(w => w && ['word','pronunciation','definition','nuance','spectrum_comparison','challenge'].every(k => typeof w[k] === 'string'))
+        : Number.isInteger(data?.score) && data.score >= 0 && data.score <= 100 && typeof data.feedback === 'string';
+      if (!valid) return {error:'The coach returned an incomplete answer. Please retry.'};
+    }
+    return response.ok ? data : {error: data?.error || 'The coach could not complete your request.', ...(data?.raw_text ? {raw_text:data.raw_text} : {})};
   } catch { return {error:'Could not reach the coach. Please try again.'}; }
 }
 export async function generateVocab(goal) {
