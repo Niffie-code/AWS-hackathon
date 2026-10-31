@@ -57,17 +57,3 @@ AWS deployment and live inference have not been tested in this repository's deve
 - `template.yaml`: Lambda, API Gateway and Bedrock IAM policy.
 
 The older `src/app.py` Mantle chat handler remains in the repository for reference; the current template deploys `web_handler.py` and uses Converse.
-
-## Learning progress and daily reminders
-
-No AWS or database is needed for these features. Newly generated words are saved automatically in browser local storage. The My progress tab shows latest and best scores, practice history, and words needing practice. Revise a sentence after feedback and resubmit to compare its score with the previous attempt. Saved words can be practiced again without regenerating them.
-
-Progress is local to this browser/device and is lost if site data is cleared. Storage failures show a warning and retain the current session in memory. Each word retains up to 100 attempts. "Confident" means the latest attempt scored at least 90; it is not a validated mastery measurement.
-
-The Notifications tab stores a local daily reminder time. An in-app reminder appears at or after that time when the page is open and awake, once per local day. Desktop notifications require explicit browser permission and platform support. Closed-page/suspended-device delivery is not supported. Download the recurring calendar event and import it into a calendar app for reminders outside the website; confirm notification settings in that calendar app.
-
-Run `npm test` for learning state and reminder scheduling tests.
-
-### Optional backup Google API key
-
-In Vercel's sensitive environment variables, keep the primary key as `GEMINI_API_KEY` and add a second authorized key as `GEMINI_API_KEY_BACKUP`. Apply them to the deployment environment you use and redeploy. Never prefix either with `VITE_` or commit their values. Requests try the primary first and fail over to the backup for service errors, rejected access, or connection failures. Duplicate keys are ignored and both attempts share an overall time budget. Rate/quota limits, invalid model configuration, blocked content and malformed output do not rotate accounts. This is not a guarantee against a Google-wide outage; two keys use the same provider.
