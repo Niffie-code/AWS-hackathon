@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Gemma chat through Bedrock Mantle, Lambda, and API Gateway HTTP API
+
+Parameters:
+  ModelId:
+    Type: String
+    Default: google.gemma-4-31b
+    Description: Confirm this model ID is available through Mantle in the deployment region.
+
+Resources:
+  ChatApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+  ChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: 256
+      Timeout: 30
+      Environment:
+        Variables:
+          MODEL_ID: !Ref ModelId
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${ModelId}'
+      Events:
+        Chat:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ChatApi
+            Path: /chat
+            Method: POST
+
+Outputs:
+  ChatEndpoint:
+    Description: Public POST endpoint accepting a JSON prompt
+    Value: !Sub 'https://${ChatApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/chat'
